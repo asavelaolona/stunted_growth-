@@ -1,0 +1,1280 @@
+---
+title: "HIV and Stunted Growth"
+author: "Asavela Olona Kama"
+format: html
+editor: visual
+---
+
+```{r}
+# Libraries 
+#| echo: false
+library(readxl)
+library(janitor)
+library(tidyverse)
+library(vegan)
+library(maps)
+library(fossil)
+library(gtsummary)
+# packages for adjusting for age and iron status 
+library(sandwich)
+library(lmtest)
+#library(openxlsx)
+getwd()
+# "/Users/asavela/Library/CloudStorage/OneDrive-SharedLibraries-CAPRISA/BioSIDS - bioinformatics/manuscripts/stunted_growth_ hiv/HIV_stunted_growth_study"
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
+
+# Load data
+
+```{r, echo=FALSE, warning=FALSE}
+#| echo: false
+zim_study_metadata <-read_excel("data /raw/Zim study MetaData ComboFile.xlsx", 
+     sheet = "MetaData") ### file has 356 observations
+
+#read_excel("HIV_stunted_growth_study/data /raw/Zim study MetaData ComboFile.xlsx")
+
+#read_excel("HIV_stunted_growth_study/data /raw/Zim study MetaData ComboFile.xlsx")
+
+zim_study_bray_dist <- read_excel("data /raw/Zim study MetaData ComboFile.xlsx", 
+   sheet = "bray-curtis-distance-matrix")
+
+zim_study_taxa<- read_excel("data /raw/Zim study MetaData ComboFile.xlsx", 
+    sheet = "transposed")
+
+iron_study_combined_metadata_final <- read_excel("data /raw/iron study combined metadata final.xlsx")
+iron_study_bray_dist <- read_excel("data /raw/iron study combined metadata final.xlsx", 
+    sheet = "Iron-Bray Curtis Distance")
+
+arrow_study<- read.csv("data /raw/Arrow study metadata final2.txt", sep= "")
+# read.csv("data /raw/Arrow study metadata final.txt", sep= "")
+```
+
+# Clean Iron study data
+
+```{r,echo=FALSE, warning=FALSE}
+#names(iron_study_combined_metadata_final)
+iron_study<-as.data.frame(iron_study_combined_metadata_final) %>% 
+  clean_names() %>% 
+  select(sample,dominance,pielous_evenness,shannon_index,simpson_index,stunted=stunted_d31)
+
+age_iron_info<-
+  select(iron_study_combined_metadata_final,
+         sample=SAMPLE, iron_stat=Factor_Iron_status,age=Age_D31) 
+```
+
+# Alpha diversity values
+
+Diversity within each sample Shannon quantifies the entropy or uncertainty of a community's species distribution. It considers both the richness (number of different species) and evenness (the distribution of individuals among species). A higher Shannon index indicates higher diversity, taking into account both the number of species and the evenness of their distribution.
+
+The Simpson diversity index, often denoted as D, measures the probability that two individuals randomly selected from a community belong to the same species. It gives more weight to the most abundant species. Dominance: Measures the relative abundance of different species in a community. It is expressed as the proportion of individuals belonging to the most abundant species. Interpretation: A high dominance value indicates that one or a few species are highly abundant, potentially dominating the community, while a low dominance value suggests a more even distribution of abundance among different species. **Pielou's Evenness (J'): A measure of how evenly individuals are distributed among different species in a community. It is calculated as the ratio of the observed diversity (Shannon index) to the maximum possible diversity (logarithm of the number of species). Interpretation: A Pielou's Evenness value close to 1 indicates a highly even distribution of individuals among species, while a value closer to 0 suggests uneven distribution, with some species dominating.** Shannon Diversity Index (H'): Quantifies the uncertainty in predicting the species identity of an individual chosen at random from a community. It considers both species richness and evenness. Interpretation: Higher values of the Shannon index indicate higher diversity. It is sensitive to both the number of species and their relative abundance. \*\*Simpson Diversity Index (1 - D): Measures the probability that two individuals randomly selected from a community belong to the same species. It ranges from 0 (maximum diversity) to 1 (minimum diversity). Interpretation: Higher values of the Simpson index indicate lower diversity. It is more influenced by the abundance of dominant species.
+
+# Plot given alpha diversity indices
+
+```{r}
+alpha_div_df<-iron_study %>% 
+  pivot_longer(2:5, names_to = 'index', values_to ='alpha_div')
+
+alpha_div_df %>% 
+  ####4 samples didnt have enough values to compute alpha diversity indices 
+  filter(!is.na(alpha_div)) %>%  
+  mutate(stunted=case_when(stunted=='1'~'Stunted', 
+                           stunted=='0'~'Not stunted')) %>% 
+  ggplot(aes(x = index, y = alpha_div,color=as.factor(stunted))) +
+  geom_boxplot(outlier.color = NULL,outlier.size= 0.4
+               ) + 
+  #geom_jitter(size=0.4) +
+  labs(title = "Alpha diversity: Iron study", x = "Indices", y = "Scores (log10)") +
+  #theme_minimal()+
+  theme_bw() +
+  theme(legend.position = "right",  # Adjust legend position
+        legend.title = element_text(face = "bold"),  # Bold legend title
+        legend.text = element_text(size = 10),  # Adjust legend text size
+        axis.title = element_text(face = "bold", size = 12),
+        plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+       panel.grid.major = element_blank(),  # Remove major gridlines
+        panel.grid.minor = element_blank()) +
+  scale_color_manual(name="Stunting", values = c('Stunted'='blue','Not stunted'='purple'))+
+   scale_x_discrete(labels = c("dominance" = "Dominance", "pielous_evenness" = "Pielous Evenness", "shannon_index" = "Shannon Index", 'simpson_index'= "Simpson Index"), expand = c(0.2, 0) ) + scale_y_log10()#+facet_wrap(~ index)
+  #scale_y_continuous(limits = c(0, 4)) +
+  # scale_y_continuous(breaks = seq(0,4, by = 0.1))    # Adjusts y-axis
+
+```
+
+-   Dominance focuses on the abundance of the most common species.
+-   Pielou's Evenness assesses how evenly individuals are distributed among different species.
+-   Shannon Diversity Index measures the uncertainty in predicting the species identity of a randomly chosen individual.
+-   Simpson Diversity Index measures the probability that two individuals randomly selected from a community belong to the same species.
+
+# Calculate the mean and IQR for all the alpha diversity indices provided
+
+(Dominance, Shannon,Pielous evenness,Simpson)
+
+```{r}
+iron_table<-iron_study%>%select(-sample) %>% 
+   mutate(stunted=case_when(stunted=='1'~'Stunted', 
+                           stunted=='0'~'Not stunted')) %>%
+  tbl_summary(
+    by=stunted,
+    label = list(dominance ~ "Dominance",
+                 shannon_index~ "Shannon Index",
+                 simpson_index~"Simpson Index",
+                 pielous_evenness~"Pielous Evenness"),
+    type = all_continuous() ~ "continuous2",
+    statistic = all_continuous() ~ c("{mean} ({p25}, {p75})", "{min}, {max}"),
+    missing = "no"
+  ) %>% add_p() %>% add_ci()
+
+iron_table
+# Convert the tbl_summary object to a gt object
+#gt_table <- as_gt(iron_table)
+
+
+# Write the table to Excel
+#write.xlsx(gt_table, file = "iron_summary_stats.xlsx")
+a<-age_iron_info %>% left_join(iron_study)
+
+#install.packages('kableExtra')
+#library(kableExtra)
+#save_kable(as_kable_extra(iron_table), "iron_summary_table.html")
+# Fit a linear regression model with robust standard errors
+# model <- lm(shannon_index~ stunted + age + iron_stat, data = a)
+# wilcox_ <- wilcox.test(dominance ~ stunted, data = a)
+# # Print the results
+# print(wilcox_)
+```
+
+# Control for age and iron_status
+
+Dominance is the response variable, and stunted, age, and iron_status are the variables in the model. The vcovHC function from the sandwich package is used to obtain robust standard errors, and coeftest from the lmtest package is used to extract the test results.
+
+This approach allows you to adjust for age and iron_status while testing for differences between groups (stunted and unstunted) in the distribution of the response variable (the index on interest). Appropriateness of this model depends on the assumptions of linear regression being met.
+
+Always make sure to validate the assumptions of the model and consider the specific characteristics of your data before interpreting the results.
+
+```{r}
+# Fit a linear model with robust standard errors
+model <- lm(dominance ~ stunted + age + iron_stat, data = a)
+robust_model <- coeftest(model, vcov = vcovHC(model, type = "HC1"))
+
+# Print the results
+print(robust_model)
+# t test of coefficients:
+# 
+#              Estimate Std. Error t value Pr(>|t|)
+# (Intercept) 0.0721452  0.0780946  0.9238   0.3584
+# stunted     0.0093475  0.0282833  0.3305   0.7419
+# age         0.0068029  0.0065619  1.0367   0.3030
+# iron_stat   0.0186435  0.0263453  0.7077   0.4812
+```
+
+# How to interprete results from the model
+
+Intercept (0.0721452): This is the estimated intercept when all other predictors (stunted, age, iron_stat) are zero. The t-value of 0.9238 indicates that the estimated intercept is not significantly different from zero (p-value = 0.3584). Stunted (0.0093475): This is the estimated effect of the 'stunted' variable on the response variable, adjusting for age and iron_stat. The t-value of 0.3305 suggests that the effect of 'stunted' is not statistically significant (p-value = 0.7419). Age (0.0068029): This is the estimated effect of the 'age' variable on the response variable, adjusting for stunted and iron_stat. The t-value of 1.0367 indicates that there is a positive association between 'age' and the response variable, but it is not statistically significant (p-value = 0.3030). Iron_stat (0.0186435): This is the estimated effect of the 'iron_stat' variable on the response variable, adjusting for stunted and age. The t-value of 0.7077 suggests that the effect of 'iron_stat' is not statistically significant (p-value = 0.4812). In summary:
+
+The intercept and the coefficients for 'stunted,' 'age,' and 'iron_stat' are estimated while adjusting for each other. None of the coefficients are statistically significant based on the p-values. This implies that, given the data, we don't have enough evidence to reject the null hypothesis that the corresponding population coefficients are zero.
+
+### Beta diversity
+
+```{r}
+names(iron_study_bray_dist)
+iron_bray<- iron_study_bray_dist %>%
+  spread(key = subject_a, value = distance)
+
+iron_bray_matrix<-as.matrix(iron_bray[,-1])
+
+#rownames(iron_bray_matrix) <- iron_bray_matrix[,-1]
+#iron_bray_matrix$subject_b <- NULL  # Remove the subject_a column
+iron_bray_matrix<-as.matrix(iron_bray_matrix)
+#Deal with NAs
+iron_bray_matrix <- replace(iron_bray_matrix, is.na(iron_bray_matrix), 0)
+
+nmds_result <- metaMDS(iron_bray_matrix)
+
+# Plot NMDS
+#plot(nmds_result, main = "NMDS Plot using Bray-Curtis Distances")
+```
+
+# Bray with variables of interest
+
+```{r, echo=FALSE, warning=FALSE}
+distance<-scores(nmds_result)
+distance<-as.data.frame(distance) %>% 
+  mutate(sample=colnames(iron_bray_matrix))
+beta_plot_df<-iron_study %>% 
+  select(sample,stunted) %>% 
+  distinct() %>% 
+  left_join(distance)
+
+beta_plot_df %>% 
+  mutate(
+    stunted=case_when(stunted=='1'~"Stunted",
+                      stunted=='0'~'Not stunted')) %>% 
+ggplot(aes(x = sites.NMDS1, 
+           y = sites.NMDS2, color = factor(stunted), label=sample)) +
+  geom_point(size = 3) +
+  #geom_text(size = 3, vjust = 1.5) +
+  labs(title = "NMDS Plot Iron Study") +
+ theme_bw() +
+  theme(legend.position = "right",  # Adjust legend position
+        legend.title = element_text(face = "bold"),  # Bold legend title
+        legend.text = element_text(size = 10),  # Adjust legend text size
+        axis.title = element_text(face = "bold", size = 12),
+        plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+       panel.grid.major = element_blank(),  # Remove major gridlines
+        panel.grid.minor = element_blank()) +
+  scale_color_manual(name="Stunted", values = c('Stunted'='blue','Not stunted'='purple'))
+```
+
+# Permutational Multivariate Analysis of Variance (PERMANOVA)
+
+adonis2 performs PERMANOVA, which tests for differences in multivariate location (central tendency) across groups based on dissimilarity.
+
+pseudo F-statistic: This statistic represents the ratio of the between-group variance to the within-group variance. A larger F-statistic suggests stronger evidence against the null hypothesis of no differences between groups. P-value: This is the probability of observing an F-statistic as extreme as, or more extreme than, the one calculated from the data, under the null hypothesis. A small p-value (typically \< 0.05) suggests that the groups are significantly different in terms of their dissimilarity. Overall Interpretation:
+
+If the p-value is less than your chosen significance level (e.g., 0.05), you would reject the null hypothesis. This implies that there are significant differences in the dissimilarity between groups defined by the stunted variable.
+
+```{r}
+##82 samples have bray curtis values 
+samples<-unique(colnames(iron_bray_matrix))
+#keep only the samples that have bray curtis values
+perma.dt<-iron_study %>% filter(sample %in% samples)
+
+rownames(iron_bray_matrix) <-colnames(iron_bray_matrix)
+# Perform PERMANOVA
+iron_permanova <- adonis2(iron_bray_matrix ~ stunted, 
+                          data =perma.dt , permutations = 999)
+
+iron_permanova
+#Number of permutations: 999
+
+#           Df SumsOfSqs MeanSqs F.Model      R2 Pr(>F)
+# stunted    1    0.1139 0.11387 0.85981 0.01063   0.46
+# Residuals 80   10.5952 0.13244         0.98937       
+# Total     81   10.7091                 1.00000     
+```
+
+Df (Degrees of Freedom): stunted: 1 degree of freedom, representing the factor or grouping variable (stunted). Residual: 80 degrees of freedom, representing the residuals or unexplained variance. Total: 81 degrees of freedom, the sum of the degrees of freedom for the factor and residuals. SumOfSqs (Sum of Squares): stunted: 0.1139, the sum of squared differences explained by the factor (stunted). Residual: 10.5952, the sum of squared differences not explained by the factor. Total: 10.7091, the total sum of squared differences in the data. R2 (Proportion of Variance Explained): stunted: 0.01063, the proportion of the total variance explained by the factor. In this case, it indicates that the factor stunted explains only a small proportion (1.063%) of the total variability. Residual: 0.98937, the proportion of the total variance not explained by the factor. F (F-statistic): F-statistic for stunted: 0.8598, the ratio of the variance explained by the factor to the unexplained variance. It is a test statistic that follows an F-distribution. Residual F-statistic: Not provided, as it is not applicable to the residuals. Pr(\>F) (p-value): Pr(\>F) for stunted: 0.428, the p-value associated with the F-statistic. In this case, the p-value is 0.428, suggesting that the factor stunted is not statistically significant in explaining the variance. A p-value greater than 0.05 indicates that the factor is not significantly associated with the dissimilarity matrix. Interpretation:
+
+The factor stunted does not have a statistically significant effect on the dissimilarity matrix, as the p-value is greater than the commonly used significance level of 0.05. The proportion of variance explained by stunted is very low (1.063%), suggesting that this factor does not contribute significantly to the dissimilarity observed in the data.
+
+# Select top 5 taxa
+
+```{r}
+# Identify key(top 5) dominant taxa between stunted and not stunted groups (descriptive table) stratified according to Iron status and age
+iron_taxa<-iron_study_combined_metadata_final %>%
+  select(11:176) %>%
+  mutate(sample=iron_study_combined_metadata_final$SAMPLE)
+##calculate relative abundances 
+iron_taxa_long <- iron_taxa%>%
+  pivot_longer(cols = 1:166, names_to = "species", values_to = "abundance") %>% 
+  mutate(abundance = ifelse(is.na(abundance), 0, abundance)) %>% 
+  mutate(abundance=as.numeric(abundance))
+
+# Calculate total abundance for each sample
+total_abundance <- iron_taxa_long %>%
+  group_by(sample) %>%
+  summarize(total_abundance = sum(abundance)) %>% filter(total_abundance !=0)
+unique(total_abundance$total_abundance)
+# Calculate relative abundance
+iron_taxa_long<- iron_taxa_long %>%
+  left_join(total_abundance, by = "sample") %>%
+  mutate(rel_abundance = abundance / total_abundance)
+e<-iron_taxa_long %>%filter(!is.na(rel_abundance)) %>% 
+  arrange(desc(rel_abundance)) %>% 
+  group_by(species) %>% 
+  mutate(rel=as.numeric(rel_abundance))%>% 
+  mutate(tot_spec=sum(rel))
+ 
+# df_top5 <- iron_taxa_long %>%
+#   group_by(sample) %>%
+#   arrange(desc(rel_abundance)) %>%
+#   slice_head(n = 5) %>%
+#   ungroup()
+# unique(df_top5$species)
+
+df_top5_species <- iron_taxa_long %>%
+  filter(!is.na(rel_abundance)) %>%
+  filter(rel_abundance>0.1) %>% 
+  arrange(desc(rel_abundance)) %>%
+  group_by(species) %>%
+  summarise(tot = sum(rel_abundance)) %>%
+  arrange(desc(tot))  %>%
+   slice_head(n = 10) %>%
+   ungroup()
+
+df_top10_stunted<- iron_taxa_long %>%
+  #select(species, sample, rel_abundance) %>% 
+ #mutate(rel_abundance= as.numeric(rel_abundance))
+  filter(!is.na(rel_abundance)) %>%
+  filter(rel_abundance>0.1) %>% 
+  left_join(iron_study_combined_metadata_final %>% 
+             select(#age=Age_D31,
+          #iron_stat=Factor_Iron_status,
+          sample= SAMPLE,
+          stunted= STUNTED_D31)) %>% 
+  filter(stunted==1) %>% 
+  arrange(desc(rel_abundance)) %>%
+  group_by(species) %>%
+  summarise(tot = sum(rel_abundance)) %>%
+  arrange(desc(tot))  %>%
+   slice_head(n = 10) %>%
+   ungroup()
+
+unique(df_top10_stunted$species)
+# "Prevotella"       "Faecalibacterium" "Succinivibrio"   
+#  [4] "Bacteroides"      "Blautia"          "Bifidobacterium" 
+#  [7] "Megamonas"        "Roseburia"        "Dorea"           
+# [10] "Butyrivibrio" 
+
+
+# iron_taxa_wide<-iron_taxa_long %>%
+#   pivot_wider(names_from=species, values_from =  rel_abundance)
+df_top10_unstunted<- iron_taxa_long %>%
+  #select(species, sample, rel_abundance) %>% 
+ #mutate(rel_abundance= as.numeric(rel_abundance))
+  filter(!is.na(rel_abundance)) %>%
+  filter(rel_abundance>0.1) %>% 
+  left_join(iron_study_combined_metadata_final %>% 
+             select(#age=Age_D31,
+          #iron_stat=Factor_Iron_status,
+          sample= SAMPLE,
+          stunted= STUNTED_D31)) %>% 
+  filter(stunted==0) %>% 
+  arrange(desc(rel_abundance)) %>%
+  group_by(species) %>%
+  summarise(tot = sum(rel_abundance)) %>%
+  arrange(desc(tot))  %>%
+   slice_head(n = 10) %>%
+   ungroup()
+# "Prevotella"       "Faecalibacterium" "Succinivibrio"   
+#  [4] "Bacteroides"      "Roseburia"        "Blautia"         
+#  [7] "Ruminococcus"     "Bifidobacterium"  "Catenibacterium" 
+# [10] "Megamonas"   
+unique(df_top10_unstunted$species)
+top5<-unique(df_top5_species$species)
+
+unique(zim_study_metadata$studyno)
+top5_meta<-iron_taxa_long %>%
+  select(species, sample, rel_abundance) %>% 
+  filter(species %in% top5) %>% 
+  left_join(iron_study_combined_metadata_final %>% 
+              select(age=Age_D31,
+          iron_stat=Factor_Iron_status,
+          sample= SAMPLE,
+          stunted= STUNTED_D31)) %>% 
+  mutate(rel_abundance= as.numeric(rel_abundance))
+
+```
+
+```{r}
+names(top5_meta)
+
+iron_table2<-top5_meta %>%
+  mutate(iron_stat=as.factor(iron_stat)) %>% 
+  #mutate(iron_stat=case_when(stunted=='1'~'Stunted', 
+                           #stunted=='0'~'Not stunted')) %>% 
+  spread(species,rel_abundance) %>% 
+  select(-sample) %>% 
+   mutate(stunted=case_when(stunted=='1'~'Stunted', 
+                           stunted=='0'~'Not stunted')) %>%
+  tbl_summary(
+    by=stunted,
+    label = list(age ~ "Age",
+                 iron_stat ~ "Iron Status"),
+      # type = list(Actinomyces ~ "continuous2", 
+      #              Acinetobacter ~ "continuous2"),
+    type = all_continuous() ~ "continuous2",
+    statistic = all_continuous() ~ c("{mean} ({p25}, {p75})", "{min}, {max}"),
+    missing = "no"
+  ) %>% add_p()
+iron_table2
+
+```
+
+# Zim Genus by age
+
+```{r}
+# unique(top5_meta$species)
+# iron_table3<-top5_meta %>%
+#   mutate(iron_stat=as.factor(iron_stat)) %>% 
+#   mutate(age=as.numeric(age)) %>% 
+#   select(-sampleid, -study_group) %>% 
+#    tbl_strata(
+#     strata = age_cat
+#     ,
+#     ~ .x %>%
+#   tbl_summary(
+#     by=stunted,
+#     #label = list(age_cat ~ "Age"#,
+#                  #iron_stat ~ "Iron Status"
+#                  #),
+#       type = list( ~ "continuous2", 
+#                     ~ "continuous2", 
+#                   ~'continuous2',
+#                 ~'continuous2',
+#                  ~'continuous2'),
+#     #type = all_continuous() ~ "continuous2",
+#     statistic = all_continuous() ~ c("{mean} ({p25}, {p75})", "{min}, {max}"),
+#     missing = "no"
+#   ) %>% add_p())
+# 
+# iron_table3
+```
+
+# Species stratified by Stuntedness and Iron status
+
+```{r}
+
+iron_table2<-top5_meta %>%
+  mutate(iron_stat=as.factor(iron_stat)) %>% 
+  # mutate(iron_stat=case_when(iron_stat=='1'~'iron_stat 1', 
+  #                          iron_stat=='0'~'iron_stat 0')) %>% 
+  spread(species,rel_abundance) %>% 
+  select(-sample) %>% 
+   mutate(stunted=case_when(stunted=='1'~'Stunted', 
+                           stunted=='0'~'Not stunted')) %>%
+  mutate(iron_stat=
+           case_when(iron_stat=='1'~'Iron sufficient (1)',
+                     iron_stat=='0'~'Iron deficient(0)')) %>% 
+   tbl_strata(
+    strata = iron_stat,
+    ~ .x %>%
+  tbl_summary(
+    by=stunted,
+    label = list(age ~ "Age"#,
+                 #iron_stat ~ "Iron Status"
+                 ),
+      # type = list(Actinomyces ~ "continuous2", 
+      #              Acinetobacter ~ "continuous2"),
+    type = all_continuous() ~ "continuous2",
+    statistic = all_continuous() ~ c("{mean} ({p25}, {p75})", "{min}, {max}"),
+    missing = "no"
+  ) %>% add_p() %>% add_ci()
+   )
+iron_table2
+```
+
+# Heatmap of all genera
+
+```{r}
+all_genera<-iron_taxa_long %>%
+  select(species, sample, rel_abundance) %>% 
+  filter(species %in% top5) %>% 
+  left_join(iron_study_combined_metadata_final %>% 
+              select(age=Age_D31,
+          iron_stat=Factor_Iron_status,
+          sample= SAMPLE,
+          stunted= STUNTED_D31)) %>% 
+  mutate(rel_abundance= as.numeric(rel_abundance))
+
+
+heatmap_plot <- 
+ all_genera%>% mutate(stunted=
+                 case_when(stunted==1 ~ 'Stunting',
+                           stunted==0~ 'No stunting')) %>% 
+  filter(!is.na(rel_abundance)) %>% 
+  #arrange(desc(rel_abundance)) %>%  # Arrange the data by descending rel_abundance
+  #mutate(species = factor(species, levels = unique(species))) %>%  # Reorder species based on rel_abundance
+  mutate(species = reorder(species, rel_abundance)) %>%  # Reorder species based on rel_abundance
+  ggplot(aes(x = sample, y = species, fill = rel_abundance)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "purple") +  # Adjust the color scale as needed
+  labs(title = " ",
+       x = "",
+       y = "Genus",
+       fill = "Relative Abundance") +theme_bw()+
+  #theme_minimal()+
+  facet_grid(. ~ stunted) +
+  facet_grid(. ~ stunted, scales = "free_x", space = "free_x") +  # Add space between facets
+   theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+         axis.text.y = element_text(size = 4, color = "black"), 
+         strip.text = element_text(color = "black", face = "bold"),  # Color facet labels pink
+        strip.background = element_rect(fill = "grey", color = "black", size = 0.5))  # Match strip background to plot background
+
+heatmap_plot
+length(unique(all_genera$species)) #166 unique genera
+```
+
+# Clean Zim data
+
+```{r, echo=FALSE, warning=FALSE}
+#names(zim_study_metadata)
+#head(zim_study_metadata)
+
+zim_study<-as.data.frame(zim_study_metadata) #357 obs
+# make row 1 colnames and remove row 1
+colnames(zim_study)<-zim_study[1,] 
+#names(zim_study)
+# remove row 1
+zim_study<-zim_study[-1,] %>% 
+  pivot_longer(29:693, names_to = 'taxonomy',
+               values_to = 'rel_abundance') %>% 
+  separate(taxonomy, 
+           into = c("Domain", "Phylum", "Class",
+                    "Order", "Family", "Genus", "Species"), sep = "\\|") %>% 
+  clean_names() %>% distinct()
+### to select the 177 of interest only 
+study_id<-unique(zim_study_bray_dist$...1)
+
+zim_study<-filter(zim_study, studyno %in% study_id) %>% distinct()
+unique(zim_study$studyno) #177
+```
+
+# Alpha diversity: Plot given values
+
+```{r}
+stunted_values <- rep(c('Stunted', 'Non-stunted'), each = 3)
+OTU<- c(181,139,226,186,146,225)
+Chao1 <- c(233,173,295,249, 207, 295)
+Shannon<- c(4.13, 3.53, 4.59, 4.04,3.51, 4.58)
+
+zim_given <- data.frame(Stunted = stunted_values,
+                        OTU = OTU,
+                        Chao1 = Chao1,
+                        Shannon = Shannon) %>% 
+  pivot_longer(2:4,names_to= "indices", values_to = 'scores')
+
+ggplot(zim_given, aes(x = indices, y = scores, color= Stunted)) +
+    geom_boxplot() +
+   labs(title = "Alpha diversity: Zim study ", x = "Indices", y = "Scores (log10) ") +
+  #theme_minimal()+
+  theme_bw() +
+  theme(legend.position = "right",  # Adjust legend position
+        legend.title = element_text(face = "bold"),  # Bold legend title
+        legend.text = element_text(size = 10),  # Adjust legend text size
+        axis.title = element_text(face = "bold", size = 12),
+        plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+       panel.grid.major = element_blank(),  # Remove major gridlines
+        panel.grid.minor = element_blank()) +
+  scale_color_manual(name="Stunting", values = c('Stunted'='blue','Non-stunted'='purple')) +
+  scale_y_log10()+facet_wrap(~ indices,scales = "free")
+  # scale_y_continuous(limits = c(0, 300)) +
+  # scale_y_continuous(breaks = seq(0,300, by = 10))    # Adjusts y-axis
+  # scale_x_discrete(labels = c("dominance" = "Dominance", "pielous_evenness" = "Pielous Evenness", "shannon_index" = "Shannon Index", 'simpson_index'= "Simpson Index"))
+
+ 
+
+```
+
+# Alpha div
+
+```{r}
+#| echo : false
+#names(zim_study_metadata)
+dt<-zim_study_metadata
+colnames(dt)<-zim_study_metadata[1,]
+#names(dt)
+dt<-dt[-1,]
+#names(dt)
+matrix<-select(dt, 29:693) %>% 
+  mutate_all(~as.numeric(as.character(.)))
+
+matrix<-as.matrix(matrix)
+rownames(matrix)<- dt$sampleid
+
+#make all values numeric
+#matrix<-as.numeric(matrix)
+# Add a smaller constant value to avoid 0 and NAs
+#constant_value <- 0000.1
+#matrix<- matrix #+ constant_value
+
+# Calculate alpha diversity using the diversity function
+shannon<- diversity(matrix, index = "shannon")
+shannon<-as.data.frame(shannon)
+shannon$sampleid=rownames(shannon)
+simpson<-diversity(matrix, index = "simpson")
+```
+
+#shannon index plot
+
+```{r}
+shannon_plot<-zim_study %>% 
+  select(sampleid,stunted) %>% 
+  left_join(shannon) %>% 
+  distinct()
+# Subset data for people with stunted growth
+stunted_data <- filter(shannon_plot, stunted != 'non-stunted') 
+non_stunted_data<- filter(shannon_plot, stunted != 'stunted') 
+
+# Calculate median and IQR for height among people with stunted growth
+median_shannon_stunted <- median(stunted_data$shannon) #2.36370
+median_non_stunted_data<-median(non_stunted_data$shannon) #.352
+
+median_shannon_stunted <- median(stunted_data$shannon[stunted_data$stunted== 'stunted'])
+#iqr_shan_stunted <- IQR(stunted_data$shannon)
+
+#iqr_shan_stunted
+# ggplot(shannon_plot, aes(x = stunted, y = shannon)) +
+#   geom_boxplot(fill = "lightblue", color = "blue", alpha = 0.7) +
+#   labs(title = "Shannon index", x = "Condition", y = " ") +
+#   theme_minimal()
+
+```
+
+Chao1 is a non-parametric estimator used to estimate the total number of species (species richness) in a community. It is particularly useful when there are rare or unobserved species. Chao1 provides an estimate of the total species richness by considering the number of rare species that are likely present but not observed.
+
+```{r, echo=FALSE, warning=FALSE}
+# Calculate Chao1 estimate
+chao1 <- chao1(matrix)
+# Create a community data object
+community_data <- data.frame(matrix)
+
+# Assign row names to represent sample labels
+row.names(community_data) <- dt$sampleid
+#str(community_data)
+# Calculate Chao1 estimate
+chao1_estimate <- chao1(community_data)
+chao1_estimate <- sum((colSums(matrix == 1))^2 / (2 * colSums(matrix == 2)))
+
+# Print the Chao1 estimate
+print(chao1_estimate)
+richness<-specnumber(matrix)
+
+#NaN gives an error 
+
+```
+
+These metrics provide complementary information about diversity in ecological communities. The Shannon index emphasizes both richness and evenness, Chao1 estimates species richness, and the Simpson index focuses on dominance within the community.
+
+NaN stands for "Not a Number." This typically occurs when there are not enough unique observed species (or OTUs) in the data to reliably estimate the Chao1 index.
+
+The Chao1 index is a richness estimator that relies on the presence of rare or singleton species in the dataset. If the dataset is very small, or if there are no rare species observed, the Chao1 index may not be able to provide a meaningful estimate, resulting in NaN.
+
+Common scenarios that may lead to NaN values in the Chao1 index:
+
+Low Sample Size: If the number of samples or observations in your dataset is very low, the Chao1 index may not be able to estimate the true richness reliably. No Rare Species: The Chao1 index relies on the presence of rare or singleton species to estimate total richness. If there are no rare species (species observed only once), the Chao1 index may not be applicable. Homogeneous Community: In some cases, when all samples are very similar and there is little variability in the community composition, the Chao1 index may not provide a meaningful estimate.
+
+# Beta diversity
+
+```{r, echo=FALSE, warning=FALSE}
+bray_numeric<-as.matrix(zim_study_bray_dist[-1])
+nmds_result <- metaMDS(bray_numeric)
+# Plot NMDS
+#plot(nmds_result, main = "NMDS Plot using Bray-Curtis Distances")
+```
+
+# Beta diversity with variables of interest
+
+```{r}
+distance<-scores(nmds_result)
+distance<-as.data.frame(distance) %>% 
+  mutate(studyno=rownames(distance))
+
+beta_plot_df<-zim_study %>% 
+  select(studyno,stunted) %>% 
+  distinct() %>% 
+  left_join(distance)
+
+beta_plot_df %>% mutate(
+    stunted=case_when(stunted=='non-stunted'~"Not Stunted",
+                      stunted=='stunted'~ 'Stunted')) %>%
+ggplot(#beta_plot_df,
+       aes(x = NMDS1, y = NMDS2, color = as.factor(stunted))) +
+  geom_point(size = 3) +
+  labs(title = "NMDS Plot Zim Study") +
+  theme_bw() +
+  theme(legend.position = "right",  # Adjust legend position
+        legend.title = element_text(face = "bold"),  # Bold legend title
+        legend.text = element_text(size = 10),  # Adjust legend text size
+        axis.title = element_text(face = "bold", size = 12),
+        plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+       panel.grid.major = element_blank(),  # Remove major gridlines
+        panel.grid.minor = element_blank()) +
+  scale_color_manual(name="Stunted", values = c('Stunted'='blue','Not Stunted'='purple'))
+```
+
+```{r}
+names(zim_study)
+
+b<-zim_study%>%filter(!is.na(rel_abundance)) %>% 
+  arrange(desc(rel_abundance)) %>% 
+  group_by(genus) %>% 
+  mutate(rel=as.numeric(rel_abundance))%>% 
+  mutate(tot_spec=sum(rel))
+ 
+
+
+df_top5_species <- b %>%
+  filter(!is.na(rel_abundance)) %>%
+  arrange(desc(rel)) %>%
+  group_by(genus) %>%
+  summarise(tot = sum(rel)) %>%
+  arrange(desc(tot))  %>%
+   slice_head(n = 10) %>%
+   ungroup()
+
+# iron_taxa_wide<-iron_taxa_long %>%
+#   pivot_wider(names_from=species, values_from =  rel_abundance)
+
+top5<-unique(df_top5_species$genus)
+
+top5_meta<-zim_study %>%
+  select(genus, sampleid, rel_abundance, age_cat,stunted,study_group ) %>% 
+  filter(genus %in% top5) %>% filter(!is.na(genus))
+```
+
+# Visualize top 5 Genus
+
+```{r}
+# Create a heatmap and facet it by the "stunted" variable
+zim_genera<-zim_study %>%
+  select(genus, sampleid, rel_abundance, age_cat,stunted,study_group ) #%>% 
+
+length(unique(zim_genera$sampleid)) #177
+  #filter(genus %in% top5) 
+heatmap_plot <- 
+  zim_genera %>% mutate(rel_abundance=as.numeric(rel_abundance)) %>% 
+  filter(genus %in% top5) %>% 
+  ggplot(aes(x = sampleid, y = genus, fill = rel_abundance)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "purple") +  # Adjust the color scale as needed
+  labs(title = " ",
+       x = "",
+       y = "Species",
+       fill = "Relative Abundance") +theme_bw()+
+  #theme_minimal()+
+  facet_grid(. ~ stunted) +
+  facet_grid(. ~ stunted, scales = "free_x", space = "free_x") +  # Add space between facets
+   theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+         strip.text = element_text(color = "black", face = "bold"),  # Color facet labels pink
+        strip.background = element_rect(fill = "grey", color = "black", size = 0.5))  # Match strip background to plot background
+
+
+
+heatmap_plot
+
+```
+
+```{r}
+names(top5_meta)
+
+zim_table<-top5_meta %>%
+  mutate(age_cat=as.factor(age_cat)) %>%  mutate(rel_abundance=as.numeric(rel_abundance)) %>% 
+  spread(genus,rel_abundance) %>% 
+  select(-sampleid) %>% 
+  tbl_strata(
+    strata = study_group
+    ,
+    ~ .x %>%
+  tbl_summary(
+    by=stunted,
+    label = list(age_cat ~ "Age"#,
+                 #iron_stat ~ "Iron Status"
+                 ),
+      # type = list(Ezakiella ~ "continuous2", 
+      #               Porphyromonas~ "continuous2", 
+      #             'Prevotella 6'~'continuous2',
+      #             Campylobacter~'continuous2',
+      #             'Prevotella 9'~'continuous2'),
+    type = all_continuous() ~ "continuous2",
+    statistic = all_continuous() ~ c("{mean} ({p25}, {p75})", "{min}, {max}"),
+    missing = "no"
+  ) %>% add_p() %>% add_ci()
+  )
+zim_table
+```
+
+## Different age groups
+
+```{r}
+zim_table<-top5_meta %>%
+  mutate(age_cat=as.factor(age_cat)) %>%  mutate(rel_abundance=as.numeric(rel_abundance)) %>% 
+  spread(genus,rel_abundance) %>% 
+  select(-sampleid, -study_group) %>% 
+   tbl_strata(
+    strata = age_cat
+    ,
+    ~ .x %>%
+  tbl_summary(
+    by=stunted,
+    #label = list(age_cat ~ "Age"#,
+                 #iron_stat ~ "Iron Status"
+                 #),
+      # type = list(Ezakiella ~ "continuous2", 
+      #               Porphyromonas~ "continuous2", 
+      #             'Prevotella 6'~'continuous2',
+      #             Campylobacter~'continuous2',
+      #             'Prevotella 9'~'continuous2'),
+    type = all_continuous() ~ "continuous2",
+    statistic = all_continuous() ~ c("{mean} ({p25}, {p75})", "{min}, {max}"),
+    missing = "no"
+  ) %>% add_p()%>% add_ci() 
+   )
+
+zim_table
+
+```
+
+```{r}
+zim_table<-top5_meta %>%
+  mutate(age_cat=as.factor(age_cat)) %>%  mutate(rel_abundance=as.numeric(rel_abundance)) %>% 
+  spread(genus,rel_abundance) %>% 
+  select(-sampleid) %>% 
+   tbl_strata(
+    strata = study_group
+    ,
+    ~ .x %>%
+  tbl_summary(
+    by=stunted,
+    #label = list(age_cat ~ "Age"#,
+                 #iron_stat ~ "Iron Status"
+                 #),
+      # type = list(Ezakiella ~ "continuous2", 
+      #               Porphyromonas~ "continuous2", 
+      #             'Prevotella 6'~'continuous2',
+      #             Campylobacter~'continuous2',
+      #             'Prevotella 9'~'continuous2'),
+    type = all_continuous() ~ "continuous2",
+    statistic = all_continuous() ~ c("{mean} ({p25}, {p75})", "{min}, {max}"),
+    missing = "no"
+  ) %>% add_p())
+zim_table
+```
+
+# Permanova Zim
+
+```{r}
+
+a<-zim_study %>% select(studyno,stunted) %>% distinct()
+permanova_result <- adonis2(bray_numeric ~ stunted, data = a, permutations = 999)
+permanova_result
+# Permutation test for adonis under reduced model
+# Terms added sequentially (first to last)
+# Permutation: free
+# Number of permutations: 999
+# 
+# adonis2(formula = bray_numeric ~ stunted, data = a, permutations = 999)
+#           Df SumOfSqs      R2      F Pr(>F)
+# stunted    1    0.301 0.00541 0.9522  0.453
+# Residual 175   55.319 0.99459              
+# Total    176   55.620 1.00000   
+```
+
+# Arrow study
+
+Abundances, not relative abundances, All at species level, not Family or genus like the other 2 studies
+
+```{r}
+arrow_study_dt<-arrow_study %>% 
+  clean_names() %>%  ###57 observations
+  filter(trialno!=0) %>% 
+  mutate(stunted=ifelse(trialno %in% c('R33', 'R36'), age_mos,stunted)) %>% 
+  mutate(age_mos=ifelse(trialno %in% c('R33', 'R36'), sex,age_mos)) %>% 
+mutate(trialno = replace(trialno, 
+                           which(trialno %in% c("R33"))[2], 
+                           "R33.2")) %>% 
+  mutate(trialno = replace(trialno, 
+                           which(trialno %in% c("R36"))[2], 
+                           "R36.2"))%>% 
+  mutate(trialno = replace(trialno, which(trialno == "R33")[3], "R33.3")) %>% 
+  mutate(trialno = replace(trialno, which(trialno == "R36")[3], "R36.3")) %>%
+  mutate(trialno = replace(trialno, which(trialno == "R33")[4], "R33.4")) %>% 
+  mutate(trialno = replace(trialno, which(trialno == "R36")[4], "R36.4")) %>% #56 observations
+   distinct(trialno, .keep_all = TRUE) ###55 observations
+unique(arrow_study_dt$trialno)
+
+#check for duplicates
+duplicates <- arrow_study[duplicated(arrow_study$TRIALNO), ]
+ dups<-unique(duplicates$TRIALNO)
+# #remove duplicates 
+# arrow_study_dt<-arrow_study_dt %>% filter(!trialno %in% dups)
+# ##
+
+```
+
+## Calc Rel abundances
+
+```{r}
+taxa_arrow<-arrow_study_dt %>% 
+  select(-haz, -rxcotox,-age_mos,-sex,-stunted)
+
+
+##calculate relative abundances 
+taxa_arrow <- taxa_arrow %>%
+  mutate(across(starts_with("s_"), as.numeric)) %>% 
+  pivot_longer(cols = 2:417, names_to = "species", values_to = "abundance")
+
+# Calculate total abundance for each sample
+total_abundance <- taxa_arrow%>%
+  group_by(trialno) %>%
+  summarize(total_abundance = sum(abundance))
+
+# Calculate relative abundance
+taxa_arrow<- taxa_arrow%>%
+  left_join(total_abundance, by = "trialno") %>%
+  mutate(rel_abundance = abundance / total_abundance) 
+
+
+```
+
+Beta div: Bray curtis
+
+```{r}
+arrow_mat<- taxa_arrow %>% 
+  mutate(rel_abundance=as.numeric(rel_abundance)) %>% #filter(rel_abundance>0) %>% 
+  select(-total_abundance, -abundance) %>% 
+  group_by(trialno) %>% 
+  spread(key = species, value = rel_abundance)
+rownames(arrow_mat)<-arrow_mat$trialno
+```
+
+```{r}
+
+```
+
+Bray curtis
+
+```{r}
+arrow_bray_matrix<-as.matrix(arrow_mat[,-1])
+arrow_bray_matrix<-as.matrix(arrow_bray_matrix)
+rownames(arrow_bray_matrix)<-arrow_mat$trialno
+
+# Replace missing values with a small number (e.g., 0.001)
+small_number <- 0.001
+arrow_bray_matrix <- replace_na(arrow_bray_matrix, small_number)
+
+nmds_result <- metaMDS(arrow_bray_matrix)
+# Plot NMDS
+#plot(nmds_result, main = "NMDS Plot using Bray-Curtis Distances")
+
+```
+
+```{r}
+arrow_distance<-scores(nmds_result)
+arrow_distance<-as.data.frame(arrow_distance$sites) 
+arrow_distance$trialno<-arrow_mat$trialno
+
+beta_plot_df<-arrow_study_dt %>% 
+  select(trialno,stunted) %>% 
+  distinct() %>% 
+  left_join(arrow_distance) %>% 
+  mutate(stunted=case_when(stunted=='1'~'Stunted',
+                           stunted=='0'~'Not stunted'))
+
+ggplot(beta_plot_df, aes(x = NMDS1, y = NMDS2, color = stunted)) +
+  geom_point(size = 3) +
+  labs(title = "NMDS Arrow Study ") +
+  theme_bw() +
+  theme(legend.position = "right",  # Adjust legend position
+        legend.title = element_text(face = "bold"),  # Bold legend title
+        legend.text = element_text(size = 10),  # Adjust legend text size
+        axis.title = element_text(face = "bold", size = 12),
+        plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+       panel.grid.major = element_blank(),  # Remove major gridlines
+        panel.grid.minor = element_blank()) +
+  scale_color_manual(name="Stunted", values = c('Stunted'='blue','Not stunted'='purple'))
+
+```
+
+# Permanova analysis
+
+```{r}
+# Perform PERMANOVA
+permanova_result <- adonis2(arrow_bray_matrix ~ stunted, data = beta_plot_df, permutations = 999)
+permanova_result
+# Permutation test for adonis under reduced model
+# Terms added sequentially (first to last)
+# Permutation: free
+# Number of permutations: 999
+# 
+# adonis2(formula = arrow_bray_matrix ~ stunted, data = beta_plot_df, permutations = 999)
+#          Df   SumOfSqs      R2      F Pr(>F)
+# stunted   1 9.0000e-07 0.01199 0.6551  0.843
+# Residual 54 7.4221e-05 0.98801              
+# Total    55 7.5122e-05 1.00000  
+```
+
+Shannon index
+
+```{r}
+# Add pseudocount of 1 to all values in arrow_bray_matrix to avoid neg values 
+arrow_bray_matrix <- arrow_bray_matrix + 1
+
+# Compute Shannon's diversity index
+shannon <- diversity(arrow_bray_matrix, index = "shannon")
+shannon<-as.data.frame(shannon)
+shannon$trialno=arrow_study_dt$trialno
+simpson<-diversity(arrow_bray_matrix, index = "simpson")
+simpson<-as.data.frame(simpson)
+simpson$trialno=arrow_study_dt$trialno
+
+```
+
+The outcome of the Chao1 index is a single numeric value representing an estimate of the true species richness in the community. Higher Chao1 values indicate higher estimated richness. Keep in mind that the Chao1 index is a non-parametric estimator and is sensitive to the presence of rare species in the dataset.
+
+Chao1 index is a measure of species richness, and it is often used in ecology to estimate the total number of species in a community based on observed species abundances.
+
+```{r}
+library(vegan)
+chao1
+```
+
+```{r}
+trial_no_stunted<-
+  arrow_study_dt %>% filter(stunted==1) %>% 
+  select(trialno) #25 stunted people
+
+trialno_stun<-unique(trial_no_stunted$trialno)
+
+trial_no_nonstunted<-arrow_study_dt %>% filter(stunted==0) %>% 
+  select(trialno)# 25 non stunted 
+
+trialno_nonstun<-unique(trial_no_nonstunted$trialno)
+
+# make a matrix for stunted only 
+stunted_matrix<-arrow_mat %>% 
+  filter(trialno %in% trialno_stun) 
+stunted_matrix<-as.matrix(stunted_matrix[,-1])
+
+#matrix for non-stunted 
+nonstunted_matrix<-arrow_mat %>% 
+  filter(trialno %in% trialno_nonstun) 
+nonstunted_matrix<-as.matrix(nonstunted_matrix[,-1])
+
+#calc chao1 for stunted 
+chao1_stunted_arrow <- sapply(stunted_matrix, function(x) chao1(specnumber(x)))
+chao_arrow_stun<-as.data.frame(chao1_stunted_arrow)
+chao_arrow_stun$trialno=trial_no_stunted$trialno
+
+# calc chao1 for non_stunted
+chao1_nonstunted_arrow <- sapply(nonstunted_matrix, function(x) chao1(specnumber(x)))
+chao_arrow_nonstun<-as.data.frame(chao1_nonstunted_arrow)
+chao_arrow_nonstun$trialno=trial_no_nonstunted$trialno
+
+
+x<-arrow_study_dt %>% 
+   left_join(chao_arrow_nonstun) %>%
+   left_join(chao_arrow_stun) %>% 
+   mutate(chao1 = ifelse(is.na(chao1_nonstunted_arrow), chao1_stunted_arrow,chao1_nonstunted_arrow))
+```
+When the Chao1 estimator returns a value of 0, it suggests that there are no additional unseen species predicted beyond those observed in the sample. In ecological terms, this would imply that the observed species richness in the sample is likely an accurate representation of the true species richness in the population.
+
+Sample Size: A Chao1 estimate of 0 could indicate that the sample size is too small to reliably estimate unseen species. In such cases, increasing the sample size might lead to a non-zero Chao1 estimate.
+Species Abundance Distribution: Chao1 assumes certain patterns in the species abundance distribution, such as the presence of rare species. If the observed sample does not contain any rare species, Chao1 may underestimate the true species richness.
+# Presesence of Unsampled Species: Chao1 estimates the number of unseen species based on the abundance of rare species in the sample. If there are truly no unsampled species in the population, Chao1 may correctly estimate 0.
+
+
+```{r}
+y<-x %>% distinct(trialno,.keep_all = TRUE)
+alpha_inds<-left_join(simpson,shannon) %>%
+  left_join(arrow_study_dt %>% 
+  select(stunted, trialno)) %>% 
+  left_join(y %>% select(chao1, trialno,stunted))
+
+alpha_plot_df<-arrow_study_dt %>% 
+  select(trialno,stunted) %>% 
+  distinct() %>% 
+  left_join(alpha_inds) %>%
+  pivot_longer(cols=c(shannon,simpson,chao1),names_to = 'indices', values_to='scores' ) #%>% 
+ggplot(alpha_plot_df, aes(x = indices, y =scores, fill = stunted )) +
+  geom_boxplot() +facet_wrap(~indices,scales='free'
+                             )+
+  labs(title = "Alpha diversity", x = "", y = " Scores") +
+  theme_minimal()#+scale_y_log10()
+```
+
+```{r}
+sorted_data <-  taxa_arrow %>% distinct() %>% 
+  arrange(desc(rel_abundance))
+
+top5_species <- taxa_arrow %>%
+  group_by(species) %>%
+  summarise(tot = sum(rel_abundance)) %>%
+  arrange(desc(tot)) %>%
+  slice_head(n = 5) %>%
+  ungroup()
+ 
+
+top5<-unique(top5_species$species)
+b<-filter(taxa_arrow, species %in% top5)
+c<-b %>% left_join(alpha_plot_df)
+
+# Create a heatmap and facet it by the "stunted" variable
+heatmap_plot <- 
+  c %>% #filter(!is.na(rel_abundance)) %>% 
+  mutate(stunted=
+           case_when(stunted==1 ~ 'Stunting',
+                     stunted==0~ 'No stunting')) %>% 
+  ggplot(aes(x = trialno, y = species, fill = rel_abundance)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "purple") +  # Adjust the color scale as needed
+  labs(title = " ",
+       x = "",
+       y = "Species",
+       fill = "Relative Abundance") +theme_bw()+
+  #theme_minimal()+
+  facet_grid(. ~ stunted) +
+  facet_grid(. ~ stunted, scales = "free_x", space = "free_x") +  # Add space between facets
+   theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+         strip.text = element_text(color = "black", face = "bold"),  # Color facet labels pink
+        strip.background = element_rect(fill = "grey", color = "black", size = 0.5))  # Match strip background to plot background
+
+
+
+heatmap_plot
+```
+
+# table showing top 5 species stunted vs unstunted
+```{r}
+c1<-distinct(c, .keep_all=true)
+length(unique(c1$trialno))
+length(unique(alpha_inds$trialno))
+
+n<-alpha_inds %>% distinct() %>% 
+  left_join(arrow_study_dt %>% distinct() %>% 
+              select(stunted,trialno)) %>% distinct()
+arrow_table<-c1 %>% left_join(n) %>% 
+  select(-abundance, -total_abundance, -indices,-scores) %>% distinct(.keep_all = TRUE) %>% 
+  left_join(arrow_study_dt %>%
+              select(trialno, age_mos)) %>% 
+  mutate(stunted=case_when(stunted==1~ 'Stunted',
+                           stunted==0~'Non-stunted')) %>% 
+  mutate(age_mos=as.numeric(age_mos)) %>% 
+   mutate(age_group = case_when(
+    between(age_mos, 60, 119) ~ "5-10 years",
+    between(age_mos, 120, 179) ~ "11-15 years",
+    between(age_mos, 180, 239) ~ "16-20 years",
+    TRUE ~ "Other"
+  )) %>%  mutate(chao1=as.numeric(chao1)) %>% 
+  mutate(rel_abundance=as.numeric(rel_abundance)) %>% 
+  spread(species,rel_abundance) %>% 
+  select(-trialno, #-total_abundance, -abundance,
+         -age_mos) %>% 
+   # tbl_strata(
+   #  strata = age_group
+   #  ,
+   #  ~ .x %>%
+  tbl_summary(
+    by=stunted,
+    # label = list(age_group ~ "Age"#,
+    #              #iron_stat ~ "Iron Status"
+    #              ),
+       type = list(s_acinetobacter_unclassified ~ "continuous2", 
+                   s_acidaminococcus_fermentans~ "continuous2", 
+               s_abiotrophia_defectiva~'continuous2',
+                s_acidaminococcus_intestini~'continuous2',
+                  s_actinobacillus_unclassified ~'continuous2',
+                  shannon~ 'continuous2', 
+                chao1~'continuous2',
+               simpson~'continuous2'
+               ),
+    #type = all_continuous() ~ "continuous2",
+    statistic = all_continuous() ~ c("{mean} ({p25}, {p75})", "{min}, {max}"),
+    missing = "no"
+  ) %>% add_p() %>% add_ci()#)
+arrow_table
+```
+
+# stratified according to age
+
+```{r}
+c1<-distinct(c, .keep_all=true)
+length(unique(c1$trialno))
+length(unique(alpha_inds$trialno))
+
+n<-alpha_inds %>% distinct() %>% 
+  left_join(arrow_study_dt %>% distinct() %>% 
+              select(stunted,trialno)) %>% distinct()
+
+arrow_table<-c1 %>% left_join(n) %>% 
+  select(-abundance, -total_abundance, -indices,-scores) %>% distinct(.keep_all = TRUE) %>% 
+  left_join(arrow_study_dt %>%
+              select(trialno, age_mos)) %>% 
+  mutate(stunted=case_when(stunted==1~ 'Stunted',
+                           stunted==0~'Non-stunted')) %>% 
+  mutate(age_mos=as.numeric(age_mos)) %>% 
+   mutate(age_group = case_when(
+    between(age_mos, 60, 119) ~ "5-10 years",
+    between(age_mos, 120, 179) ~ "11-15 years",
+    between(age_mos, 180, 239) ~ "16-20 years",
+    TRUE ~ "Other"
+  )) %>%  
+  mutate(rel_abundance=as.numeric(rel_abundance)) %>% 
+  spread(species,rel_abundance) %>% 
+  select(-trialno, #-total_abundance, -abundance,
+         -age_mos) %>% 
+   tbl_strata(
+    strata = age_group
+    ,
+    ~ .x %>%
+  tbl_summary(
+    by=stunted,
+    # label = list(age_group ~ "Age"#,
+    #              #iron_stat ~ "Iron Status"
+    #              ),
+       type = list(s_acinetobacter_unclassified ~ "continuous2", 
+                   s_acidaminococcus_fermentans~ "continuous2", 
+               s_abiotrophia_defectiva~'continuous2',
+                s_acidaminococcus_intestini~'continuous2',
+                  s_actinobacillus_unclassified ~'continuous2',
+                  shannon~ 'continuous2', 
+                chao1~'continuous2',
+               simpson~'continuous2'
+               ),
+    #type = all_continuous() ~ "continuous2",
+    statistic = all_continuous() ~ c("{mean} ({p25}, {p75})", "{min}, {max}"),
+    missing = "no"
+  ) %>% add_p())
+arrow_table
+
+```
+
+# Stratified acc to rxcotox (CTX status???)
+
+```{r}
+
+
+arrow_table<-c1 %>% left_join(alpha_inds) %>% 
+  select(-abundance, -total_abundance, -indices, -scores) %>% distinct() %>% 
+  left_join(arrow_study_dt %>%
+              select(trialno, rxcotox, age_mos)) %>% 
+  mutate(stunted=case_when(stunted==1~ 'Stunted',
+                           stunted==0~'Non-stunted')) %>% 
+  mutate(age_mos=as.numeric(age_mos)) %>% 
+   mutate(age_group = case_when(
+    between(age_mos, 60, 119) ~ "5-10 years",
+    between(age_mos, 120, 179) ~ "11-15 years",
+    between(age_mos, 180, 239) ~ "16-20 years",
+    TRUE ~ "Other"
+  )) %>%  
+  mutate(rel_abundance=as.numeric(rel_abundance)) %>% 
+  spread(species,rel_abundance) %>% 
+  select(-trialno, #-total_abundance, -abundance,
+         -age_mos) %>%filter(!rxcotox>1) %>% 
+  #select(-trialno, -total_abundance, -abundance, -age_mos) %>% 
+   tbl_strata(
+    strata = rxcotox #CTX status?
+    ,
+    ~ .x %>%
+  tbl_summary(
+    by=stunted,
+    # label = list(age_group ~ "Age"#,
+    #              #iron_stat ~ "Iron Status"
+    #              ),
+      type = list(s_acinetobacter_unclassified ~ "continuous2", 
+                   s_acidaminococcus_fermentans~ "continuous2", 
+               s_abiotrophia_defectiva~'continuous2',
+                s_acidaminococcus_intestini~'continuous2',
+                  s_actinobacillus_unclassified ~'continuous2',
+                  shannon~ 'continuous2', 
+                chao1~'continuous2',
+               simpson~'continuous2'
+               ),
+    #type = all_continuous() ~ "continuous2",
+    statistic = all_continuous() ~ c("{mean} ({p25}, {p75})", "{min}, {max}"),
+    missing = "no"
+  ) %>% add_p() %>% add_ci())
+arrow_table
+
+```
+
+```{r}
+# excel_file_path <- "path/to/your/outputfile.xlsx"
+# 
+# # Write the data frame to an Excel file
+# write.xlsx(data, excel_file_path)
+```
